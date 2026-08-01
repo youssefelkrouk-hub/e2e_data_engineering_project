@@ -1,0 +1,12 @@
+2026-07-29 19:18:31,084 [INFO] Connected to DuckDB database.
+2026-07-29 19:18:31,106 [INFO] Created raw_layer schema.
+2026-07-29 19:18:31,120 [INFO] Created refined_layer schema.
+2026-07-29 19:18:31,134 [INFO] Created report_layer schema.
+2026-07-29 19:18:31,158 [INFO] Created raw_layer.sales table.
+2026-07-29 19:18:31,160 [INFO] Added ingestion_timestamp column to raw_layer.sales.
+2026-07-29 19:18:31,180 [INFO] Created refined_layer.sales table.
+2026-07-29 19:18:31,192 [INFO] Added ingestion_timestamp column to refined_layer.sales.
+2026-07-29 19:18:31,200 [INFO] Created report_layer.sales_by_country table.
+2026-07-29 19:18:31,209 [INFO] Created report_layer.sales_by_product table.
+2026-07-29 19:18:31,214 [INFO] Created report_layer.sales_by_payment_method table.
+2026-07-29 19:18:31,271 [INFO] Closed the database connection.
