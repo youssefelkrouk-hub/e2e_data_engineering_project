@@ -221,14 +221,3 @@ DuckDB has no native Power BI connector yet. Two practical options:
 ├── requirements.txt          # Python dependencies
 └── README.md                 # This file
 ```
-
----
-
-## 🗺️ Possible Future Improvements
-
-- Secure the Mockaroo API key via Airflow Connections/Variables instead of hardcoding it
-- Move large data transport from XCom to intermediate storage (file/S3) for better scalability, since XCom is not designed for large payloads
-- Add data quality checks (e.g. Great Expectations) between the raw → refined layers
-- Add a `data_quality_check` task before loading into `refined_layer`
-- Add a dedicated `export_to_powerbi` task that writes Parquet files for BI consumption on each run
-- Consider historizing `report_layer` (instead of daily overwrite) if trend analysis over time becomes a requirement
