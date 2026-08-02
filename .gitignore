@@ -3,4 +3,5 @@ __pycache__/
 *.pyc
 airflow/logs/
 *.duckdb
+*.log
 .env
