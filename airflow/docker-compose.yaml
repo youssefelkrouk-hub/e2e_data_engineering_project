@@ -76,6 +76,12 @@ x-airflow-common:
     _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
     # The following line can be used to set a custom config file, stored in the local config folder
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+    # --- Data warehouse connection (used by sales.py, init_db_schema.py, etc.) ---
+    WAREHOUSE_DB_HOST: warehouse-db
+    WAREHOUSE_DB_PORT: 5432
+    WAREHOUSE_DB_NAME: ecommerce_data
+    WAREHOUSE_DB_USER: dwh_user
+    WAREHOUSE_DB_PASSWORD: dwh_password
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
@@ -89,6 +95,8 @@ x-airflow-common:
       condition: service_healthy
     postgres:
       condition: service_healthy
+    warehouse-db:
+      condition: service_healthy
 
 services:
   postgres:
@@ -101,6 +109,27 @@ services:
       - postgres-db-volume:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  # Dedicated PostgreSQL instance for the e-commerce data warehouse
+  # (raw_layer / refined_layer / report_layer). Kept separate from the
+  # 'postgres' service above, which only stores Airflow's own metadata.
+  warehouse-db:
+    image: postgres:16
+    container_name: warehouse-db
+    environment:
+      POSTGRES_USER: dwh_user
+      POSTGRES_PASSWORD: dwh_password
+      POSTGRES_DB: ecommerce_data
+    ports:
+      - "5433:5432"   # host:container — 5433 avoids clashing with the airflow postgres (5432)
+    volumes:
+      - warehouse-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "dwh_user", "-d", "ecommerce_data"]
       interval: 10s
       retries: 5
       start_period: 5s
@@ -336,3 +365,4 @@ services:
 
 volumes:
   postgres-db-volume:
+  warehouse-db-volume:

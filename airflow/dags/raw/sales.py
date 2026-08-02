@@ -3,7 +3,10 @@ sales.py
 
 Airflow DAG (classic syntax with DAG(...) as dag:) that extracts sales data
 from the Mockaroo API (CSV format) and loads it through a medallion
-architecture in DuckDB:
+architecture, writing to BOTH storage backends at every layer:
+
+    - DuckDB   (local file: /opt/airflow/db/ecommerce_data.duckdb)
+    - PostgreSQL (warehouse-db container)
 
     raw_layer.sales -> refined_layer.sales -> report_layer.*
 
@@ -12,12 +15,14 @@ Pipeline:
 """
 
 import logging
+import os
 from datetime import datetime, timedelta
 from io import StringIO
 
 import duckdb
 import pandas as pd
 import requests
+from sqlalchemy import create_engine, text
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
@@ -25,8 +30,16 @@ from airflow.operators.python import PythonOperator
 # Configuration
 # ----------------------------------------------------------------------------
 API_URL = "https://my.api.mockaroo.com/sales_data"
-API_KEY = "c5e8c340"
-DUCKDB_PATH = "/opt/airflow/db/ecommerce_data.duckdb"
+API_KEY = os.environ.get("MOCKAROO_API_KEY", "c5e8c340")
+
+DUCKDB_PATH = os.environ.get("DUCKDB_PATH", "/opt/airflow/db/ecommerce_data.duckdb")
+
+PG_HOST = os.environ.get("WAREHOUSE_DB_HOST", "warehouse-db")
+PG_PORT = os.environ.get("WAREHOUSE_DB_PORT", "5432")
+PG_DB = os.environ.get("WAREHOUSE_DB_NAME", "ecommerce_data")
+PG_USER = os.environ.get("WAREHOUSE_DB_USER", "dwh_user")
+PG_PASSWORD = os.environ.get("WAREHOUSE_DB_PASSWORD", "dwh_password")
+PG_URL = f"postgresql+psycopg2://{PG_USER}:{PG_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_DB}"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,6 +50,58 @@ default_args = {
     "owner": "youssef",
     "retries": 2,
     "retry_delay": timedelta(minutes=2),
+}
+
+RAW_COLUMNS = [
+    'order_id', 'order_date', 'quantity', 'payment_method', 'order_status',
+    'customer_id', 'customer_name', 'email', 'gender', 'country_code',
+    'product_id', 'product_name', 'unit_price'
+]
+
+TRANSFORM_SQL = """
+    INSERT INTO refined_layer.sales (
+        order_id, order_date, customer_id, customer_name,
+        product_id, product_name, quantity, unit_price,
+        total_amount, payment_method, order_status,
+        email, gender, country_code, is_valid_transaction,
+        ingestion_timestamp
+    )
+    SELECT
+        order_id, order_date, customer_id, customer_name,
+        product_id, product_name, quantity, unit_price,
+        quantity * unit_price AS total_amount,
+        payment_method, order_status, email, gender, country_code,
+        (
+            quantity > 0
+            AND unit_price > 0
+            AND order_status NOT IN ('cancelled', 'refunded')
+            AND email IS NOT NULL
+            AND email != ''
+        ) AS is_valid_transaction,
+        current_timestamp AS ingestion_timestamp
+    FROM raw_layer.sales
+    WHERE order_id NOT IN (SELECT order_id FROM refined_layer.sales)
+"""
+
+REPORT_QUERIES = {
+    "sales_by_country": ("country_code", """
+        SELECT country_code, SUM(total_amount) AS total_revenue,
+               COUNT(*) AS total_orders, AVG(total_amount) AS avg_order_value
+        FROM refined_layer.sales WHERE is_valid_transaction = TRUE
+        GROUP BY country_code
+    """),
+    "sales_by_product": ("product_id, product_name", """
+        SELECT product_id, product_name, SUM(total_amount) AS total_revenue,
+               COUNT(*) AS total_orders, AVG(total_amount) AS avg_order_value
+        FROM refined_layer.sales WHERE is_valid_transaction = TRUE
+        GROUP BY product_id, product_name
+    """),
+    "sales_by_payment_method": ("payment_method", """
+        SELECT payment_method, SUM(total_amount) AS total_revenue,
+               COUNT(*) AS total_orders, AVG(total_amount) AS avg_order_value
+        FROM refined_layer.sales WHERE is_valid_transaction = TRUE
+        GROUP BY payment_method
+    """),
 }
 
 
@@ -64,150 +129,118 @@ def fetch_sales_data(**kwargs):
 
 
 def store_sales_data_to_db(**kwargs):
-    """Store the fetched sales data into DuckDB raw_layer.sales table."""
+    """Insert raw sales data into raw_layer.sales on BOTH DuckDB and PostgreSQL."""
     data_dict = kwargs['ti'].xcom_pull(task_ids='fetch_sales_data', key='sales_data')
+    df = pd.DataFrame(data_dict)[RAW_COLUMNS]
 
-    conn = duckdb.connect(DUCKDB_PATH)
+    # --- DuckDB ---
+    duck_conn = None
     try:
-        for record in data_dict:
-            conn.execute("""
+        duck_conn = duckdb.connect(DUCKDB_PATH)
+        for record in df.to_dict(orient="records"):
+            duck_conn.execute("""
                 INSERT INTO raw_layer.sales
                 (order_id, order_date, quantity, payment_method, order_status,
                  customer_id, customer_name, email, gender, country_code,
                  product_id, product_name, unit_price)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (
-                record['order_id'], record['order_date'], record['quantity'],
-                record['payment_method'], record['order_status'],
-                record['customer_id'], record['customer_name'], record['email'],
-                record['gender'], record['country_code'], record['product_id'],
-                record['product_name'], record['unit_price']
-            ))
-
-        logging.info(
-            "Data successfully inserted into DuckDB raw_layer.sales table (%d rows).",
-            len(data_dict),
-        )
-
+            """, tuple(record[col] for col in RAW_COLUMNS))
+        logging.info("[DuckDB] Inserted %d rows into raw_layer.sales.", len(df))
     except Exception as e:
-        logging.error(f"Failed to insert data into DuckDB: {e}")
+        logging.error("[DuckDB] Failed to insert data: %s", e)
         raise
     finally:
-        conn.close()
-        logging.info("Closed DuckDB connection (store_sales_data_to_db).")
+        if duck_conn:
+            duck_conn.close()
+            logging.info("[DuckDB] Connection closed.")
+
+    # --- PostgreSQL ---
+    pg_engine = None
+    try:
+        pg_engine = create_engine(PG_URL)
+        df.to_sql(name='sales', schema='raw_layer', con=pg_engine, if_exists='append', index=False)
+        logging.info("[PostgreSQL] Inserted %d rows into raw_layer.sales.", len(df))
+    except Exception as e:
+        logging.error("[PostgreSQL] Failed to insert data: %s", e)
+        raise
+    finally:
+        if pg_engine:
+            pg_engine.dispose()
+            logging.info("[PostgreSQL] Connection closed.")
 
 
 def transform_to_refined(**kwargs):
-    """Clean, validate, and enrich raw sales data into the refined layer (idempotent)."""
-    conn = duckdb.connect(DUCKDB_PATH)
+    """Transform raw -> refined on BOTH DuckDB and PostgreSQL (idempotent)."""
+    # --- DuckDB ---
+    duck_conn = None
     try:
-        conn.execute("""
-            INSERT INTO refined_layer.sales (
-                order_id, order_date, customer_id, customer_name,
-                product_id, product_name, quantity, unit_price,
-                total_amount, payment_method, order_status,
-                email, gender, country_code, is_valid_transaction,
-                ingestion_timestamp
-            )
-            SELECT
-                order_id,
-                order_date,
-                customer_id,
-                customer_name,
-                product_id,
-                product_name,
-                quantity,
-                unit_price,
-                quantity * unit_price AS total_amount,
-                payment_method,
-                order_status,
-                email,
-                gender,
-                country_code,
-                (
-                    quantity > 0
-                    AND unit_price > 0
-                    AND order_status NOT IN ('cancelled', 'refunded')
-                    AND email IS NOT NULL
-                    AND email != ''
-                ) AS is_valid_transaction,
-                current_timestamp AS ingestion_timestamp
-            FROM raw_layer.sales
-            WHERE order_id NOT IN (SELECT order_id FROM refined_layer.sales)
-        """)
-
-        count = conn.execute("SELECT COUNT(*) FROM refined_layer.sales").fetchone()[0]
-        logging.info("Refined layer updated. Total rows now: %d", count)
-
+        duck_conn = duckdb.connect(DUCKDB_PATH)
+        duck_conn.execute(TRANSFORM_SQL)
+        count = duck_conn.execute("SELECT COUNT(*) FROM refined_layer.sales").fetchone()[0]
+        logging.info("[DuckDB] refined_layer.sales updated. Total rows: %d", count)
     except Exception as e:
-        logging.error(f"Failed to transform data into refined layer: {e}")
+        logging.error("[DuckDB] Failed to transform data: %s", e)
         raise
     finally:
-        conn.close()
-        logging.info("Closed DuckDB connection (transform_to_refined).")
+        if duck_conn:
+            duck_conn.close()
+            logging.info("[DuckDB] Connection closed.")
+
+    # --- PostgreSQL ---
+    pg_engine = None
+    try:
+        pg_engine = create_engine(PG_URL)
+        with pg_engine.begin() as conn:
+            conn.execute(text(TRANSFORM_SQL + " ON CONFLICT (order_id) DO NOTHING"))
+            count = conn.execute(text("SELECT COUNT(*) FROM refined_layer.sales")).scalar()
+        logging.info("[PostgreSQL] refined_layer.sales updated. Total rows: %d", count)
+    except Exception as e:
+        logging.error("[PostgreSQL] Failed to transform data: %s", e)
+        raise
+    finally:
+        if pg_engine:
+            pg_engine.dispose()
+            logging.info("[PostgreSQL] Connection closed.")
 
 
 def generate_reports(**kwargs):
-    """Generate/refresh aggregated reports from the refined layer (idempotent per day)."""
-    conn = duckdb.connect(DUCKDB_PATH)
+    """Refresh report_layer.* on BOTH DuckDB and PostgreSQL (idempotent per day)."""
+    # --- DuckDB ---
+    duck_conn = None
     try:
-        # Delete today's report rows first to avoid duplicates if the DAG
-        # runs more than once on the same day.
-        conn.execute("DELETE FROM report_layer.sales_by_country WHERE report_date = current_date")
-        conn.execute("DELETE FROM report_layer.sales_by_product WHERE report_date = current_date")
-        conn.execute("DELETE FROM report_layer.sales_by_payment_method WHERE report_date = current_date")
-
-        # Report by country
-        conn.execute("""
-            INSERT INTO report_layer.sales_by_country
-            (country_code, total_revenue, total_orders, avg_order_value)
-            SELECT
-                country_code,
-                SUM(total_amount) AS total_revenue,
-                COUNT(*) AS total_orders,
-                AVG(total_amount) AS avg_order_value
-            FROM refined_layer.sales
-            WHERE is_valid_transaction = TRUE
-            GROUP BY country_code
-        """)
-
-        # Report by product
-        conn.execute("""
-            INSERT INTO report_layer.sales_by_product
-            (product_id, product_name, total_revenue, total_orders, avg_order_value)
-            SELECT
-                product_id,
-                product_name,
-                SUM(total_amount) AS total_revenue,
-                COUNT(*) AS total_orders,
-                AVG(total_amount) AS avg_order_value
-            FROM refined_layer.sales
-            WHERE is_valid_transaction = TRUE
-            GROUP BY product_id, product_name
-        """)
-
-        # Report by payment method
-        conn.execute("""
-            INSERT INTO report_layer.sales_by_payment_method
-            (payment_method, total_revenue, total_orders, avg_order_value)
-            SELECT
-                payment_method,
-                SUM(total_amount) AS total_revenue,
-                COUNT(*) AS total_orders,
-                AVG(total_amount) AS avg_order_value
-            FROM refined_layer.sales
-            WHERE is_valid_transaction = TRUE
-            GROUP BY payment_method
-        """)
-
-        logging.info("Reports generated/refreshed successfully for today.")
-
+        duck_conn = duckdb.connect(DUCKDB_PATH)
+        for report_name, (group_cols, select_sql) in REPORT_QUERIES.items():
+            duck_conn.execute(f"DELETE FROM report_layer.{report_name} WHERE report_date = current_date")
+            cols = group_cols.replace(" ", "").split(",")
+            insert_cols = ", ".join(cols + ["total_revenue", "total_orders", "avg_order_value"])
+            duck_conn.execute(f"INSERT INTO report_layer.{report_name} ({insert_cols}) {select_sql}")
+        logging.info("[DuckDB] Reports refreshed successfully.")
     except Exception as e:
-        logging.error(f"Failed to generate reports: {e}")
+        logging.error("[DuckDB] Failed to generate reports: %s", e)
         raise
     finally:
-        conn.close()
-        logging.info("Closed DuckDB connection (generate_reports).")
+        if duck_conn:
+            duck_conn.close()
+            logging.info("[DuckDB] Connection closed.")
+
+    # --- PostgreSQL ---
+    pg_engine = None
+    try:
+        pg_engine = create_engine(PG_URL)
+        with pg_engine.begin() as conn:
+            for report_name, (group_cols, select_sql) in REPORT_QUERIES.items():
+                conn.execute(text(f"DELETE FROM report_layer.{report_name} WHERE report_date = current_date"))
+                cols = group_cols.replace(" ", "").split(",")
+                insert_cols = ", ".join(cols + ["total_revenue", "total_orders", "avg_order_value"])
+                conn.execute(text(f"INSERT INTO report_layer.{report_name} ({insert_cols}) {select_sql}"))
+        logging.info("[PostgreSQL] Reports refreshed successfully.")
+    except Exception as e:
+        logging.error("[PostgreSQL] Failed to generate reports: %s", e)
+        raise
+    finally:
+        if pg_engine:
+            pg_engine.dispose()
+            logging.info("[PostgreSQL] Connection closed.")
 
 
 # ----------------------------------------------------------------------------
@@ -216,7 +249,7 @@ def generate_reports(**kwargs):
 with DAG(
     'load_sales_data_to_db',
     default_args=default_args,
-    description='ETL DAG: Mockaroo API -> raw_layer -> refined_layer -> report_layer (DuckDB)',
+    description='ETL DAG: Mockaroo API -> raw_layer -> refined_layer -> report_layer (dual: DuckDB + PostgreSQL)',
     schedule='@daily',
     catchup=False,
     start_date=datetime(2026, 7, 1),

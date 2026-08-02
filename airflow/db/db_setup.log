@@ -1,0 +1,2 @@
+2026-08-02 13:52:01,774 [ERROR] [DuckDB] An error occurred: IO Error: Cannot open file "//opt/airflow/db/ecommerce_data.duckdb": Le chemin réseau n’a pas été trouvé.
+

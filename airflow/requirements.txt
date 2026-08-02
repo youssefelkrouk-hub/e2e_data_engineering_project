@@ -1,1 +1,6 @@
 duckdb==1.5.5
+psycopg2-binary
+sqlalchemy
+pandas
+requests
+pyarrow
