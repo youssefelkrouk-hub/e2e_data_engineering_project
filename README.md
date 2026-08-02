@@ -10,7 +10,7 @@ The pipeline is orchestrated with **Apache Airflow**, and the entire environment
 
 ## 🖼️ Architecture Diagram
 
-![ETL Pipeline Architecture: Mockaroo API -> Python -> Apache Airflow -> DuckDB -> Power BI](architecture.png)
+![ETL Pipeline Architecture: Mockaroo API -> Python -> Apache Airflow -> DuckDB -> Power BI](ETL_arch.png)
 
 Data flows from the Mockaroo API into a Python-based extraction step, orchestrated by Apache Airflow, all running inside Docker. The processed data lands in the DuckDB data warehouse, which is then queried or exported (via ODBC connection or file export) for visualization in Power BI, running outside the Docker environment.
 
