@@ -144,12 +144,80 @@ FROM refined_layer.sales
 WHERE is_valid_transaction = FALSE
   AND order_status IN ('cancelled', 'refunded');
 
+--- without using the Widow function ,just the GROUP: ligne per ligne 
+select customer_name,SUM(unit_price) 
+FROM raw_layer.sales 
+group by customer_name
+
+--- total_amount per country_code
+-- GROUP BY : une seule ligne par pays
+SELECT customer_name,country_code, SUM(total_amount) AS total
+FROM refined_layer.sales
+GROUP BY country_code,customer_name;
+
+-- Window function : garde CHAQUE commande, ajoute le total du pays à côté
+SELECT
+    customer_name,
+    country_code,
+    SUM(total_amount) OVER (PARTITION BY country_code) AS country_total
+FROM refined_layer.sales;
+
+
+-- For each country, what is the revenue ranking of each product 
+SELECT
+    country_code,
+    product_id,
+    total_amount,
+    RANK() OVER (
+        PARTITION BY country_code
+        ORDER BY total_amount DESC
+    ) AS revenue_rank_in_country
+FROM refined_layer.sales
+WHERE is_valid_transaction = TRUE;
+
+
+ 
+SELECT CURRENT_DATE; --- for selecting the current date 
+
+
+SUM(total_amount) OVER (ORDER BY order_date)
+
+
+SELECT
+    order_date,
+    SUM(total_amount) OVER (ORDER BY order_date) AS cumulative_revenue
+FROM refined_layer.sales
+WHERE is_valid_transaction = TRUE;
+
+
+
+
+
+ -- customer  name that duplicate
+ SELECT customer_name, COUNT(*) AS x from raw_layer.sales
+ WHERE x>1
+ GROUP BY customer_name
+
+
+
+-- 
+SELECT *
+FROM raw_layer.sales
+WHERE order_id IN (
+    SELECT order_id
+    FROM raw_layer.sales
+    GROUP BY order_id
+    HAVING COUNT(*) > 1
+)
+ORDER BY order_id, order_date;
+
 
 
 select * from raw_layer.sales;
 select * from refined_layer.sales;
 select * from report_layer.sales_by_country;
 select * from report_layer.sales_by_payment_method;
+select * from report_layer.sales_by_product;
 SELECT AVG(total_amount) AS Avrage_amount
 FROM refined_layer.sales
 select product_id , product_name,COUNT(*) from report_layer.sales_by_product
