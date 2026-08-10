@@ -1,3 +1,46 @@
+--> What is an index? <--
+-- An index in SQL is a data structure (like a book's index) that allows the database engine to quickly locate and retrieve rows without scanning the entire table. It's usually implemented as a B-Tree or
+-- Hash structure depending on the database engine. 
+
+--> How indexing works <--
+-- When a query runs with a WHERE, JOIN, or ORDER BY clause, SQL looks up the index instead of
+-- Scanning all rows sequentially (a full table scan).
+--> without using index :
+
+SELECT * FROM refined_layer.sales -- Without an index: PostgreSQL has to read the table row by row to check which ones have country_code = 'US'. This process is called a full table scan.If your table has 10,000 rows, that’s still manageable.
+WHERE country_code = 'US'; --But if the table grows to 10 million rows (after months of daily runs), each query will become slower and slower because PostgreSQL must scan every single row before returning the result.
+
+
+-- to show the process of this  full scan: the QUERY PLAN  
+EXPLAIN ANALYZE
+SELECT * FROM refined_layer.sales
+WHERE country_code = 'US';  --Seq Scan = sequential scan = full table scan (slow on large table).
+
+-- Seq Scan on sales  (cost=0.00..2.75 rows=1 width=285) (actual time=0.022..0.042 rows=5 loops=1)
+
+-- AFTER index :   
+CREATE INDEX idx_refined_sales_country
+ON refined_layer.sales (country_code);
+
+
+EXPLAIN ANALYZE
+SELECT * FROM refined_layer.sales
+WHERE country_code = 'US';
+
+ -- Index Scan using idx_refined_sales_country on sales
+
+CREATE INDEX mon_super_index ON raw_layer.sales (ingestion_timestamp);
+
+EXPLAIN ANALYZE
+SELECT * 
+FROM raw_layer.sales
+ORDER BY ingestion_timestamp;
+
+
+
+
+-- Sample query to visualise my data
+
 SELECT order_id, COUNT(*)
 FROM raw_layer.sales
 GROUP BY order_id
@@ -211,7 +254,222 @@ WHERE order_id IN (
 )
 ORDER BY order_id, order_date;
 
+-- Count how many countries have more than 5 valid orders: using a inner query  and then a outer query 
 
+SELECT COUNT(*) AS country_count
+FROM (
+    SELECT country_code
+    FROM refined_layer.sales
+    WHERE is_valid_transaction = TRUE
+    GROUP BY country_code
+    HAVING COUNT(*) > 5
+) AS subquery;
+
+-- in other  more optimize with returning the country_code
+SELECT country_code 
+FROM refined_layer.sales
+WHERE is_valid_transaction = TRUE
+GROUP BY country_code
+HAVING COUNT(*) > 5;
+
+
+-- using a CTE (common table expression) with the famous "WITH ... AS " syntaxe
+
+WITH valid_countries AS(
+    SELECT country_code
+    FROM refined_layer.sales
+    WHERE is_valid_transaction = TRUE
+    GROUP BY country_code
+    HAVING COUNT(*) > 5
+) 
+SELECT COUNT(DISTINCT country_code) AS country_count
+FROM valid_countries ;
+
+
+-- Retrieve orders with amounts above the average order value
+SELECT *
+FROM refined_layer.sales
+WHERE total_amount > (SELECT AVG(total_amount) FROM refined_layer.sales);
+
+-- data quality check  : finds order with a non-positive quantity or price
+SELECT * 
+FROM raw_layer.sales
+
+--- Reminder	—	the	core	idea:	unlike	GROUP	BY,	which	collapses	multiple
+-- rows	into	one,	a	window	function	keeps	every	original	row	and	adds	a
+-- calculated	column	based	on	a	“window”	of	related	rows	(defined	by	
+-- PARTITION	BY	and/or	ORDER	BY).
+
+-- ROW_NUMBER():assigns a unique sequential number to each row 
+
+SELECT	
+  customer_id,	
+  order_id,	
+  order_date,
+  ROW_NUMBER()	OVER	(PARTITION	BY	customer_id	)	AS	rn
+FROM	refined_layer.sales
+
+--- using a cte and return just customer  where the rn different then 1
+
+WITH ranked AS(
+SELECT	
+  customer_id,	
+  order_id,	
+  order_date,
+  ROW_NUMBER()	OVER	(PARTITION	BY	customer_id	)	AS	rn
+FROM	refined_layer.sales
+
+)
+SELECT * from ranked where rn!=1;
+
+-- Ranks	rows,	leaving	gaps	after	ties	(1,	2,	2,	4…)
+SELECT
+  payment_method,
+  customer_id,	
+  order_id,	
+  order_date,
+  ROW_NUMBER()	OVER	(PARTITION BY payment_method )	AS	rn
+FROM	refined_layer.sales
+
+SELECT
+  payment_method,
+  customer_id,	
+  order_id,	
+  order_date,
+  RANK()	OVER	(PARTITION BY payment_method )	AS	rn
+FROM	refined_layer.sales
+
+
+
+
+
+SELECT country_code , order_id , total_amount,
+       ROW_NUMBER() OVER(PARTITION BY country_code ORDER BY total_amount DESC) as revenue_rank
+FROM refined_layer.sales
+WHERE is_valid_transaction=TRUE 
+
+
+SELECT country_code , order_id , total_amount,
+       RANK() OVER(PARTITION BY country_code ORDER BY total_amount DESC) as revenue_rank
+FROM refined_layer.sales
+WHERE is_valid_transaction=TRUE 
+
+
+-- DENSE_RANK() runn after the 
+
+SELECT country_code , order_id , total_amount,
+       DENSE_RANK() OVER(PARTITION BY country_code ORDER BY total_amount DESC) as revenue_rank
+FROM refined_layer.sales
+WHERE revenue_rank=2;
+	   
+	   
+
+-- Sans ORDER BY : ordre arbitraire, rn=1 ne veut rien dire de précis
+SELECT customer_id, order_id, order_date,
+       ROW_NUMBER() OVER (PARTITION BY customer_id) AS rn
+FROM refined_layer.sales
+ORDER BY customer_id;
+
+-- Avec ORDER BY : rn=1 = commande la plus récente, garanti
+SELECT customer_id, order_id, order_date,
+       ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_date DESC) AS rn
+FROM refined_layer.sales
+ORDER BY customer_id, rn;
+
+
+
+
+
+SELECT 
+   customer_id,
+   order_id,
+   RANK() OVER(ORDER BY order_id DESC) as rn
+FROM raw_layer.sales
+
+
+--- this explain the diffrence between RANK adn DENSE_RANK : 
+---> RANK : assigns the same rank to equals values and skips the next rank numbers
+SELECT 
+   customer_id,
+   quantity ,
+   RANK() OVER(ORDER BY quantity DESC  ) as rn
+FROM raw_layer.sales
+
+---> DENSE_RANK() assigns the same rank to equal values but does not skip numbers
+SELECT 
+   customer_id,
+   quantity ,
+   DENSE_RANK() OVER(ORDER BY quantity DESC  ) as rn
+FROM raw_layer.sales
+
+
+
+-- NTILE(n) Splits	rows	into	n	roughly	equal	buckets,	numbered	1	to	n.
+
+SELECT	
+    order_id,
+    total_amount,
+NTILE(10)	OVER	(ORDER	BY	total_amount	DESC)	AS	decile
+FROM	refined_layer.sales
+WHERE	is_valid_transaction	=	TRUE;
+--- LAG(column,	offset,	default) 
+--- Returns	the	value	of	column	from	a	previous	row	(default	offset	=	1)
+--- Within	the	partition.
+
+---> Usage:	compare	each	order’s	amount	to	the	customer’s	previous order	—	detect	growing	spend.
+	
+WITH cte AS(
+   SELECT customer_id , order_date,total_amount,
+       LAG(total_amount) OVER (ORDER BY order_date ) AS prv_amount
+	FROM refined_layer.sales
+)
+SELECT	*	FROM	cte  	WHERE	total_amount	< prv_amount;	
+
+
+-- LEAD(column,	offset,	default)
+-- The	mirror	of	LAG()	—	returns	the	value	from	a	following	row.
+
+-- Usage:	for	each	order,	see	the	amount	of	the	customer’s	next	order,	to
+-- compute	the	number	of	days	until	their	next	purchase.
+
+SELECT	
+    customer_id,
+	order_date,
+    LEAD(order_date)	OVER	(PARTITION	BY	customer_id	ORDER	BY order_date)	AS	next_order_date
+FROM	refined_layer.sales;
+
+-- FIRST_VALUE(column)
+-- Returns	the	value	of	column	from	the	first	row	of	the	window	frame
+-- Usage:	attach	each	customer’s	first-ever	order	amount	to	every	one	of
+-- their	rows	(useful	to	compare	“first	order	size”	vs	“current	order size”).
+SELECT	
+  customer_id,	
+  order_id,	
+  order_date,
+  total_amount,
+  FIRST_VALUE(total_amount)	OVER	( PARTITION	BY	customer_id	ORDER	BY	order_date)	AS	first_order_amount
+FROM	refined_layer.sales; 
+
+-- 3.	Aggregate	functions	used	as	window functions
+--> Any	standard	aggregate	(SUM,	AVG,	COUNT,	MIN,	MAX)	can	be	turned	into	a
+--> window	function	simply	by	adding	OVER.
+SELECT	
+    order_date,
+	SUM(total_amount)	OVER	(ORDER	BY	order_date)	AS	cumulative_revenue
+FROM	refined_layer.sales
+WHERE	is_valid_transaction	=	TRUE;
+
+
+-->  AVG()	OVER	(...)	—	moving	average
+
+SELECT	
+    order_date,
+	AVG(total_amount)	OVER	( ORDER	BY	order_date ROWS	BETWEEN	6	PRECEDING	AND	CURRENT	ROW) AS	moving_avg_7d
+FROM	refined_layer.sales
+WHERE	is_valid_transaction	=TRUE;
+
+
+ 
 
 select * from raw_layer.sales;
 select * from refined_layer.sales;
