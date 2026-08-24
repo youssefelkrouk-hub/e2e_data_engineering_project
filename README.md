@@ -72,7 +72,7 @@ Each report table carries a `report_date` column (`DEFAULT current_date`). On ev
 
 ## 🗂️ Entity-Relationship Diagram (ERD)
 
-![ER Diagram: raw_layer.sales, refined_layer.sales, and the three report_layer tables, with their columns and relationships](ER _ diagram .png)
+![ER Diagram: raw_layer.sales, refined_layer.sales, and the three report_layer tables, with their columns and relationships](images/ER_diagram.png)
 
 `raw_layer.sales` is transformed into `refined_layer.sales` (business rules applied, deduplicated by `order_id`), which is then aggregated into the three `report_layer` tables — one per dimension (country, product, payment method). Each box above shows the exact columns and data types used on both the DuckDB and PostgreSQL backends.
 
