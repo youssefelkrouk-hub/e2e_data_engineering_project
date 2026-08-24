@@ -70,6 +70,14 @@ Each report table carries a `report_date` column (`DEFAULT current_date`). On ev
 
 ---
 
+## 🗂️ Entity-Relationship Diagram (ERD)
+
+![ER Diagram: raw_layer.sales, refined_layer.sales, and the three report_layer tables, with their columns and relationships](ER_diagram.png)
+
+`raw_layer.sales` is transformed into `refined_layer.sales` (business rules applied, deduplicated by `order_id`), which is then aggregated into the three `report_layer` tables — one per dimension (country, product, payment method). Each box above shows the exact columns and data types used on both the DuckDB and PostgreSQL backends.
+
+---
+
 ## ⚙️ Airflow DAG — `load_sales_data_to_db`
 
 ### Main goal of the DAG
@@ -92,6 +100,12 @@ Each task only starts once the previous one has completed successfully — this 
 | `generate_reports`          | Aggregates validated rows into the three `report_layer.*` tables on **both** backends (refreshed daily)    |
 
 Within each task, the DuckDB write and the PostgreSQL write are two independent operations, each wrapped in its own `try/except/finally` block — so a failure on one backend doesn't silently mask a failure on the other, and Airflow retries the whole task if either one fails.
+
+### ✅ Example of a successful run
+
+![Airflow task instances: fetch_sales_data, transform_to_refined, store_sales_data_to_db, and generate_reports, all showing a green Succès status](successful_task.png)
+
+All four tasks completed successfully, in the expected order (`fetch_sales_data` → `store_sales_data_to_db` → `transform_to_refined` → `generate_reports`), confirming that both the DuckDB and PostgreSQL writes went through at every layer for this run.
 
 ### Why `PythonOperator`
 
@@ -248,7 +262,7 @@ Connect with:
 - **Host**: `localhost`
 - **Port**: `5433` (mapped from the container's internal `5432`, to avoid clashing with Airflow's own `postgres` service)
 - **Database**: `ecommerce_data`
-- **Username** / **Password**: as set in `.env` 
+- **Username** / **Password**: as set in `.env`
 
 Then browse `raw_layer`, `refined_layer`, and `report_layer`, or run the queries in `db/main.sql`.
 
@@ -272,12 +286,14 @@ Then browse `raw_layer`, `refined_layer`, and `report_layer`, or run the queries
 │       └── sales.py            # Main Airflow DAG — writes to DuckDB AND PostgreSQL at every layer (raw, refined, report)
 ├── db/
 │   ├── init_db_schema.py       # Creates the schema on BOTH DuckDB and PostgreSQL
-│   ├── db_steup.log #  logs file for information       
+│   ├── db_steup.log            # Log file for schema initialization runs
 │   └── ecommerce_data.duckdb   # DuckDB database file (generated)
 ├── Dockerfile                  # Extends the official Airflow image with project dependencies
 ├── docker-compose.yaml         # Docker services: Airflow components, warehouse-db, postgres, redis
 ├── requirements.txt            # Python dependencies (duckdb, psycopg2-binary, sqlalchemy, ...)
 ├── .env                        # Local environment variables (NEVER committed to Git)
+├── ER_diagram.png              # Entity-Relationship Diagram of the warehouse schema
+├── successful_task.png         # Screenshot of a successful Airflow DAG run
 └── README.md                   # Project overview
 ```
 
