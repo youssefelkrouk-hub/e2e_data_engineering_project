@@ -72,7 +72,7 @@ Each report table carries a `report_date` column (`DEFAULT current_date`). On ev
 
 ## 🗂️ Entity-Relationship Diagram (ERD)
 
-![ER Diagram: raw_layer.sales, refined_layer.sales, and the three report_layer tables, with their columns and relationships](images/ER_diagram.png)
+![ER Diagram: raw_layer.sales, refined_layer.sales, and the three report_layer tables, with their columns and relationships](ER_diagram.png)
 
 `raw_layer.sales` is transformed into `refined_layer.sales` (business rules applied, deduplicated by `order_id`), which is then aggregated into the three `report_layer` tables — one per dimension (country, product, payment method). Each box above shows the exact columns and data types used on both the DuckDB and PostgreSQL backends.
 
@@ -106,6 +106,10 @@ Within each task, the DuckDB write and the PostgreSQL write are two independent 
 ![Airflow task instances: fetch_sales_data, transform_to_refined, store_sales_data_to_db, and generate_reports, all showing a green Succès status](successful_task.png)
 
 All four tasks completed successfully, in the expected order (`fetch_sales_data` → `store_sales_data_to_db` → `transform_to_refined` → `generate_reports`), confirming that both the DuckDB and PostgreSQL writes went through at every layer for this run.
+
+![Airflow DAG graph view: fetch_sales_data -> store_sales_data_to_db -> transform_to_refined -> generate_reports, all shown in green success](load_sales_data_to_db-graph_by_airflow.png)
+
+The Graph view in the Airflow UI shows the same run as a flowchart, making the `>>` task dependencies visually explicit.
 
 ### Why `PythonOperator`
 
@@ -293,7 +297,8 @@ Then browse `raw_layer`, `refined_layer`, and `report_layer`, or run the queries
 ├── requirements.txt            # Python dependencies (duckdb, psycopg2-binary, sqlalchemy, ...)
 ├── .env                        # Local environment variables (NEVER committed to Git)
 ├── ER_diagram.png              # Entity-Relationship Diagram of the warehouse schema
-├── successful_task.png         # Screenshot of a successful Airflow DAG run
+├── successful_task.png         # Screenshot of a successful Airflow DAG run (task list)
+├── load_sales_data_to_db-graph_by_airflow.png  # Screenshot of the DAG graph view (successful run)
 └── README.md                   # Project overview
 ```
 
