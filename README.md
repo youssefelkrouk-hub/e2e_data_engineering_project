@@ -19,6 +19,8 @@ Data flows from the Mockaroo API into a Python-based extraction step, orchestrat
 ## 🏗️ Data Warehouse Architecture
 
 The Data Warehouse follows a **medallion architecture (bronze / silver / gold)**, organized into three layers (schemas), maintained identically on **both** storage backends:
+![Medallion Architecture](Medallion%20Architecture.jfif)
+
 
 - **DuckDB**: a single local file, `ecommerce_data.duckdb`, mounted into the Airflow containers via a Docker volume.
 - **PostgreSQL**: a dedicated `warehouse-db` container (separate from the PostgreSQL instance used internally for Airflow's own metadata).
