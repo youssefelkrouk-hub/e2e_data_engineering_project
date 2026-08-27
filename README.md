@@ -10,7 +10,7 @@ The pipeline is orchestrated with **Apache Airflow**, and the entire environment
 
 ## 🖼️ Architecture Diagram
 
-![ETL Pipeline Architecture: Mockaroo API -> Python -> Apache Airflow -> DuckDB + PostgreSQL -> Power BI](ETL_arch.png)
+![ETL Pipeline Architecture: Mockaroo API -> Python -> Apache Airflow -> DuckDB + PostgreSQL -> Power BI](img/ETL_arch.png)
 
 Data flows from the Mockaroo API into a Python-based extraction step, orchestrated by Apache Airflow, all running inside Docker. Within the medallion pipeline (Raw Layer → Refined Layer → Report Layer), Airflow writes the processed data to **both** DuckDB and PostgreSQL in parallel — the same schema is maintained on each backend. Power BI, running outside the Docker environment, connects to either warehouse (via file export/ODBC for DuckDB, or a direct database connection for PostgreSQL).
 
@@ -19,7 +19,7 @@ Data flows from the Mockaroo API into a Python-based extraction step, orchestrat
 ## 🏗️ Data Warehouse Architecture
 
 The Data Warehouse follows a **medallion architecture (bronze / silver / gold)**, organized into three layers (schemas), maintained identically on **both** storage backends:
-![Medallion Architecture](Medallion%20Architecture.jfif)
+![Medallion Architecture](img/Medallion%20Architecture.jfif)
 
 
 - **DuckDB**: a single local file, `ecommerce_data.duckdb`, mounted into the Airflow containers via a Docker volume.
@@ -72,7 +72,7 @@ Each report table carries a `report_date` column (`DEFAULT current_date`). On ev
 
 ## 🗂️ Entity-Relationship Diagram (ERD)
 
-![ER Diagram: raw_layer.sales, refined_layer.sales, and the three report_layer tables, with their columns and relationships](ER_diagram.png)
+![ER Diagram: raw_layer.sales, refined_layer.sales, and the three report_layer tables, with their columns and relationships](img/ER_diagram.png)
 
 `raw_layer.sales` is transformed into `refined_layer.sales` (business rules applied, deduplicated by `order_id`), which is then aggregated into the three `report_layer` tables — one per dimension (country, product, payment method). Each box above shows the exact columns and data types used on both the DuckDB and PostgreSQL backends.
 
@@ -103,11 +103,11 @@ Within each task, the DuckDB write and the PostgreSQL write are two independent 
 
 ### ✅ Example of a successful run
 
-![Airflow task instances: fetch_sales_data, transform_to_refined, store_sales_data_to_db, and generate_reports, all showing a green Succès status](successful_task.png)
+![Airflow task instances: fetch_sales_data, transform_to_refined, store_sales_data_to_db, and generate_reports, all showing a green Succès status](img/successful_task.png)
 
 All four tasks completed successfully, in the expected order (`fetch_sales_data` → `store_sales_data_to_db` → `transform_to_refined` → `generate_reports`), confirming that both the DuckDB and PostgreSQL writes went through at every layer for this run.
 
-![Airflow DAG graph view: fetch_sales_data -> store_sales_data_to_db -> transform_to_refined -> generate_reports, all shown in green success](load_sales_data_to_db-graph_by_airflow.png)
+![Airflow DAG graph view: fetch_sales_data -> store_sales_data_to_db -> transform_to_refined -> generate_reports, all shown in green success](img/load_sales_data_to_db-graph_by_airflow.png)
 
 The Graph view in the Airflow UI shows the same run as a flowchart, making the `>>` task dependencies visually explicit.
 
@@ -140,6 +140,42 @@ The DuckDB write and the PostgreSQL write in a given task are **independent** �
 
 ---
 
+## 📊 Power BI Dashboard — Vision Ventes: Performance, Profit & Croissance
+
+![Power BI dashboard: Vision Ventes - Performance, Profit & Croissance](img/dashboard_KPIs.png)
+
+Once the `refined_layer` and `report_layer` tables are populated, the warehouse can be connected directly to **Power BI** to build interactive reporting on top of the pipeline's output. This dashboard, **Vision Ventes: Performance, Profit & Croissance**, was built from the **refined_layer** data (rather than the pre-aggregated `report_layer` tables), so all measures and breakdowns below are computed live in Power BI from the cleaned, validated transactions.
+
+### Data source
+- **Connection**: Power BI's native **PostgreSQL** connector, pointing at the `warehouse-db` container (`localhost:5433` / `ecommerce_data`)
+- **Table used**: `refined_layer.sales` — i.e. only rows that already passed the pipeline's validation logic (`is_valid_transaction = TRUE`), giving accurate revenue figures without needing to re-filter cancelled/refunded orders in Power BI itself
+
+### Visuals included
+
+| Visual | Type | What it shows |
+|---|---|---|
+| **Total Revenue par country_code** | Bar chart | Total revenue broken down by country, sorted descending — highlights that a small number of countries (led by `CN`) drive the majority of revenue |
+| **Country / Revenue / Payment Method table** | Table | Row-level detail of total revenue per country alongside the associated payment method (PayPal, Apple Pay, credit card, Venmo, etc.), with a total row |
+| **Somme de unit_price par quantity** | Pie chart | Distribution of total unit price summed by order quantity (1, 2, 3, or 4 units per order) — shows the four quantity buckets are fairly evenly split (~24–26% each) |
+| **Année (Year) summary table** | Table | Total Revenue, Total Orders, and Avg Order Value broken down by year (2020–2026), with a grand total row — useful for tracking year-over-year growth |
+| **Unique Customers par country_code** | Line chart | Number of unique customers per country, sorted descending — same top countries as the revenue chart, useful for spotting revenue-per-customer differences |
+| **Product list** | List / table | Scrollable list of distinct `product_name` values available in the refined data (e.g. "Appetizer - Sausage Rolls", "Bacon Strip Precooked", "Beef - Flank Steak") — used as a reference/filter list for the other visuals |
+
+### Why build on `refined_layer` instead of `report_layer`
+
+The three `report_layer` tables (`sales_by_country`, `sales_by_product`, `sales_by_payment_method`) already provide pre-aggregated totals, but this dashboard needed a few dimensions that aren't part of those fixed aggregations — notably the **year-over-year breakdown** and the **quantity-based distribution**. Connecting directly to `refined_layer.sales` gives full flexibility to slice the validated transactions by any dimension in Power BI, at the cost of Power BI (rather than the pipeline) doing the aggregation work at query time.
+
+### Key insights visible on the dashboard
+- Revenue is heavily concentrated in a handful of countries, with `CN` far ahead of the rest (~$30K vs under $10K for most others)
+- Revenue is fairly evenly distributed across order quantities (1 to 4 units), suggesting no single order size dominates sales
+- Total revenue and order volume peaked around 2022 (~$30K, 20 orders) before declining in more recent years in this dataset
+- The same top countries by revenue are also the top countries by unique customer count, suggesting revenue concentration is driven by customer volume rather than a few high-spending customers
+
+### Refreshing the dashboard
+Since the DAG runs `@daily` and `refined_layer.sales` is updated idempotently on every run, the Power BI report can be set to **Scheduled Refresh** (Power BI Service) or refreshed manually (Power BI Desktop) to pull in the latest validated transactions without any changes needed to the report itself.
+
+---
+
 ## 📦 Requirements
 
 ### Required software
@@ -147,6 +183,7 @@ The DuckDB write and the PostgreSQL write in a given task are **independent** �
 - Python 3.9+ (for local execution outside the container, if needed)
 - A [Mockaroo](https://www.mockaroo.com/) account with a valid API key
 - [pgAdmin](https://www.pgadmin.org/) or [DBeaver](https://dbeaver.io/) (recommended, for browsing the warehouses)
+- [Power BI Desktop](https://powerbi.microsoft.com/desktop/) (for building/viewing the dashboard above)
 
 ### Python dependencies (installed in the Airflow image, on top of the base `apache/airflow` image)
 ```
@@ -181,7 +218,7 @@ This project deliberately writes to both backends, since they serve different pu
 | **Best for** | Fast local analytics, ad-hoc queries, notebooks | BI tools, dashboards, multi-user/production access |
 | **Setup** | Zero configuration — just a file path | Requires host, port, user, password |
 | **Power BI** | No native connector (ODBC or file export needed) | Native PostgreSQL connector built into Power BI |
-| **Use case here** | Quick local inspection (DBeaver, Python scripts) | Central warehouse for BI and shared access |
+| **Use case here** | Quick local inspection (DBeaver, Python scripts) | Central warehouse for BI and shared access (this is the backend the dashboard above connects to) |
 
 In short: **DuckDB** is used for lightweight, zero-setup local analysis, while **PostgreSQL** acts as the shared, production-style warehouse that other tools (like Power BI) connect to directly.
 
@@ -276,7 +313,7 @@ Then browse `raw_layer`, `refined_layer`, and `report_layer`, or run the queries
 3. Explore the `raw_layer`, `refined_layer`, and `report_layer` schemas
 
 ### From Power BI
-- **PostgreSQL**: use Power BI's built-in **Get Data → PostgreSQL database** connector, pointing to `localhost:5433` / `ecommerce_data`
+- **PostgreSQL**: use Power BI's built-in **Get Data → PostgreSQL database** connector, pointing to `localhost:5433` / `ecommerce_data` — this is the connection used for the *Vision Ventes* dashboard above, querying `refined_layer.sales` directly
 - **DuckDB**: no native Power BI connector yet — either install the DuckDB ODBC driver and connect via **Get Data → ODBC**, or export report tables to Parquet/CSV and load them via **Get Data → Parquet/Text-CSV**
 
 ---
@@ -284,22 +321,31 @@ Then browse `raw_layer`, `refined_layer`, and `report_layer`, or run the queries
 ## 📁 Project Structure
 
 ```
-.
-├── dags/
-│   └── raw/
-│       └── sales.py            # Main Airflow DAG — writes to DuckDB AND PostgreSQL at every layer (raw, refined, report)
-├── db/
-│   ├── init_db_schema.py       # Creates the schema on BOTH DuckDB and PostgreSQL
-│   ├── db_steup.log            # Log file for schema initialization runs
-│   └── ecommerce_data.duckdb   # DuckDB database file (generated)
-├── Dockerfile                  # Extends the official Airflow image with project dependencies
-├── docker-compose.yaml         # Docker services: Airflow components, warehouse-db, postgres, redis
-├── requirements.txt            # Python dependencies (duckdb, psycopg2-binary, sqlalchemy, ...)
-├── .env                        # Local environment variables (NEVER committed to Git)
-├── ER_diagram.png              # Entity-Relationship Diagram of the warehouse schema
-├── successful_task.png         # Screenshot of a successful Airflow DAG run (task list)
-├── load_sales_data_to_db-graph_by_airflow.png  # Screenshot of the DAG graph view (successful run)
-└── README.md                   # Project overview
+DATAENG/
+├── airflow/              # Airflow project root — DAGs, Dockerfile, docker-compose.yaml, Airflow config
+│   └── dags/
+│       └── raw/
+│           └── sales.py          # Main DAG — writes to DuckDB AND PostgreSQL at every layer (raw, refined, report)
+├── doc&books/            # Reference documentation / learning material kept alongside the project
+├── img/                  # Diagrams and screenshots used in the README
+│   ├── ETL_arch.png
+│   ├── Medallion Architecture.jfif
+│   ├── ER_diagram.png
+│   ├── successful_task.png
+│   ├── load_sales_data_to_db-graph_by_airflow.png
+│   └── dashboard_KPIs.png        # Power BI dashboard screenshot (Vision Ventes: Performance, Profit & Croissance)
+├── init/                 # Schema initialization scripts — creates tables on BOTH DuckDB and PostgreSQL
+│   └── init_db_schema.py
+├── postgresql/           # PostgreSQL-specific assets (e.g. main.sql queries, warehouse-db config/volumes)
+├── power bi/             # Power BI report file(s) — the "Vision Ventes" dashboard (.pbix)
+├── ysfvenv/              # Local Python virtual environment (excluded from Git via .gitignore)
+├── .gitignore            # Excludes ysfvenv/, .env, __pycache__, *.duckdb, etc. from version control
+├── README.md             # Project overview (this file)
+├── requirements.txt      # Python dependencies (duckdb, psycopg2-binary, sqlalchemy, ...)
+├── testing_duckdb.py     # Standalone script for testing DuckDB connections/queries outside Airflow
+└── testing_function.py   # Standalone script for testing pipeline functions in isolation
 ```
+
+
 
 ---
