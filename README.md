@@ -142,8 +142,7 @@ The DuckDB write and the PostgreSQL write in a given task are **independent** �
 
 ## 📊 Power BI Dashboard — Vision Ventes: Performance, Profit & Croissance
 
-![Power BI dashboard: Vision Ventes - Performance, Profit & Croissance](img/dashboard_KPIs.png)
-
+![Power BI dashboard: Vision Ventes - Performance, Profit & Croissance](power%20bi/dashboard%26KPIs.png)
 Once the `refined_layer` and `report_layer` tables are populated, the warehouse can be connected directly to **Power BI** to build interactive reporting on top of the pipeline's output. This dashboard, **Vision Ventes: Performance, Profit & Croissance**, was built from the **refined_layer** data (rather than the pre-aggregated `report_layer` tables), so all measures and breakdowns below are computed live in Power BI from the cleaned, validated transactions.
 
 ### Data source
