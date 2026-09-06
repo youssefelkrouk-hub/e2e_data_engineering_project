@@ -1,4 +1,7 @@
+![ETL Mind Map](img/ETL_mind_map.png)
+
 # Sales Data ETL Pipeline — Mockaroo to a Dual DuckDB / PostgreSQL Data Warehouse
+![ETL Pipeline Architecture Mind Map of all ](img/ETL_arch.png)
 
 ## 🎯 Project Goal
 
@@ -327,6 +330,7 @@ DATAENG/
 │           └── sales.py          # Main DAG — writes to DuckDB AND PostgreSQL at every layer (raw, refined, report)
 ├── doc&books/            # Reference documentation / learning material kept alongside the project
 ├── img/                  # Diagrams and screenshots used in the README
+│   ├── ETL_mind_map.png          # Full ETL concept mind map (Extraction / Transformation / Load)
 │   ├── ETL_arch.png
 │   ├── Medallion Architecture.jfif
 │   ├── ER_diagram.png
