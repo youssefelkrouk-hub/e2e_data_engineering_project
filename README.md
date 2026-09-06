@@ -1,4 +1,4 @@
-![ETL Mind Map](img/ETL_mind_map.png)
+![ETL Mind Map](img/ETL__mind__map.png)
 
 # Sales Data ETL Pipeline — Mockaroo to a Dual DuckDB / PostgreSQL Data Warehouse
 ![ETL Pipeline Architecture Mind Map of all ](img/ETL_arch.png)
